@@ -1,68 +1,102 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import type { FindAllParameters, TaskDto } from './task.dto';
+import { FindAllParameters, TaskDto, TaskStatusEnum } from './task.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { TaskEntity } from 'src/db/entities/task.entity';
+import { Like, type FindOptionsWhere, type Repository } from 'typeorm';
 
 @Injectable()
 export class TaskService {
+  constructor(
+    @InjectRepository(TaskEntity)
+    private readonly taskRepository: Repository<TaskEntity>,
+  ) {}
+
   private tasks: TaskDto[] = [];
 
-  create(task: TaskDto) {
-    this.tasks.push(task);
+  async create(task: TaskDto) {
+    const taskToSave: TaskEntity = {
+      title: task.title,
+      description: task.description,
+      expirationDate: task.expirationDate,
+      status: TaskStatusEnum.TO_DO,
+    };
+
+    const createdTask = await this.taskRepository.save(taskToSave);
+
+    return this.mapEntityToDto(createdTask);
   }
 
-  findById(id: string): TaskDto {
-    const foundTask = this.tasks.filter((task) => task.id === id);
+  async findById(id: string): Promise<TaskDto> {
+    const foundTask = await this.taskRepository.findOne({ where: { id } });
 
-    if (foundTask.length) {
-      return foundTask[0];
+    if (!foundTask) {
+      throw new HttpException(
+        `Task with id ${id} not found`,
+        HttpStatus.NOT_FOUND,
+      );
     }
 
-    throw new HttpException(
-      `Task with id ${id} not found`,
-      HttpStatus.NOT_FOUND,
-    );
+    return this.mapEntityToDto(foundTask);
   }
 
-  findAll(params: FindAllParameters): TaskDto[] {
-    return this.tasks.filter((task) => {
-      let match = true;
+  async findAll(params: FindAllParameters): Promise<TaskDto[]> {
+    const searchParam: FindOptionsWhere<TaskEntity> = {};
 
-      if (params.title !== undefined && !task.title.includes(params.title)) {
-        match = false;
-      }
+    if (params.title) {
+      searchParam.title = Like(`%${params.title}%`);
+    }
 
-      if (params.status !== undefined && !task.status.includes(params.status)) {
-        match = false;
-      }
+    if (params.status) {
+      searchParam.status = Like(`%${params.status}%`);
+    }
 
-      return match;
+    const tasksFound = await this.taskRepository.find({
+      where: searchParam,
     });
+
+    return tasksFound.map((taskEntity) => this.mapEntityToDto(taskEntity));
   }
 
-  update(task: TaskDto) {
-    const taskIndex = this.tasks.findIndex((t) => t.id === task.id);
+  async update(id: string, task: TaskDto) {
+    const foundTask = await this.taskRepository.findOne({ where: { id } });
 
-    if (taskIndex >= 0) {
-      this.tasks[taskIndex] = task;
-      return;
+    if (!foundTask) {
+      throw new HttpException(
+        `Task with id ${task.id} not found`,
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
-    throw new HttpException(
-      `Task with id ${task.id} not found`,
-      HttpStatus.BAD_REQUEST,
-    );
+    await this.taskRepository.update(id, this.mapDtoToEntity(task));
   }
 
-  remove(id: string) {
-    const taskIndex = this.tasks.findIndex((task) => task.id === id);
+  async remove(id: string) {
+    const result = await this.taskRepository.delete(id);
 
-    if (taskIndex >= 0) {
-      this.tasks.splice(taskIndex, 1);
-      return;
+    if (!result.affected) {
+      throw new HttpException(
+        `Task with id ${id} not found`,
+        HttpStatus.BAD_REQUEST,
+      );
     }
+  }
 
-    throw new HttpException(
-      `Task with id ${id} not found`,
-      HttpStatus.BAD_REQUEST,
-    );
+  private mapEntityToDto(taskEntity: TaskEntity): TaskDto {
+    return {
+      id: taskEntity.id,
+      title: taskEntity.title,
+      description: taskEntity.description,
+      expirationDate: taskEntity.expirationDate,
+      status: TaskStatusEnum[taskEntity.status],
+    };
+  }
+
+  private mapDtoToEntity(taskDto: TaskDto): Partial<TaskEntity> {
+    return {
+      title: taskDto.title,
+      description: taskDto.description,
+      expirationDate: taskDto.expirationDate,
+      status: taskDto.status.toString(),
+    };
   }
 }
